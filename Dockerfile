@@ -1,15 +1,36 @@
 FROM java:8-jdk
+# Use bash instead of default /bin/sh
+RUN rm /bin/sh && ln -s /bin/bash /bin/sh
 
-RUN apt-get update && apt-get install -y wget git curl ruby zip && rm -rf /var/lib/apt/lists/*
-RUN gem install bundler
+# Install build tools for ruby and puppet
+RUN apt-get update
+RUN apt-get install -y apt-utils
+RUN apt-get install -y ruby git-core git zlib1g-dev build-essential libssl-dev libreadline-dev libyaml-dev libsqlite3-dev sqlite3 libxml2-dev libxslt1-dev libcurl4-openssl-dev python-software-properties libffi-dev wget curl vim
+RUN rm -rf /var/lib/apt/lists/*
+
+# Use git to install rbenv and setup the environment
+RUN git clone https://github.com/sstephenson/rbenv.git ~/.rbenv
+RUN echo 'export PATH="$HOME/.rbenv/bin:$HOME/.rbenv/shims:$PATH"' >> ~/.bashrc
+
+# Install ruby-build for installing different ruby versions
+RUN git clone https://github.com/sstephenson/ruby-build.git ~/.rbenv/plugins/ruby-build
+RUN echo 'export PATH="$HOME/.rbenv/plugins/ruby-build/bin:$PATH"' >> ~/.bashrc
+RUN echo 'export PATH="$HOME/.rbenv/versions/1.8.7-p352/bin:$PATH"' >> ~/.bashrc
+RUN gem update --system
+
+# Initialize correct ruby on shell start
+RUN echo 'eval "$(rbenv init -)"' >> ~/.bashrc
+RUN echo 'rbenv global 1.8.7-p352' >> ~/.bashrc
+RUN echo 'rbenv local 1.8.7-p352' >> ~/.bashrc
+RUN echo 'rbenv shell 1.8.7-p352' >> ~/.bashrc
+
+# Use rbenv to install ruby 1.8.7-p352, then install bundler
+# These flags are mandatory when compiling old versions of ruby with a new GCC
+RUN CFLAGS="-O2 -fno-tree-dce -fno-optimize-sibling-calls" ~/.rbenv/bin/rbenv install 1.8.7-p352
+RUN source ~/.bashrc && gem install bundler -v 1.10.5
 
 ENV JENKINS_HOME /var/jenkins_home
 ENV JENKINS_SLAVE_AGENT_PORT 50000
-
-# Jenkins is run with user `jenkins`, uid = 1000
-# If you bind mount a volume from the host or a data container, 
-# ensure you use the same uid
-RUN useradd -d "$JENKINS_HOME" -u 1000 -m -s /bin/bash jenkins
 
 # Jenkins home directory is a volume, so configuration and build history 
 # can be persisted and survive image upgrades
@@ -38,7 +59,6 @@ RUN curl -fL http://mirrors.jenkins-ci.org/war-stable/$JENKINS_VERSION/jenkins.w
   && echo "$JENKINS_SHA /usr/share/jenkins/jenkins.war" | sha1sum -c -
 
 ENV JENKINS_UC https://updates.jenkins-ci.org
-RUN chown -R jenkins "$JENKINS_HOME" /usr/share/jenkins/ref
 
 # for main web interface:
 EXPOSE 8080
@@ -48,10 +68,13 @@ EXPOSE 50000
 
 ENV COPY_REFERENCE_FILE_LOG $JENKINS_HOME/copy_reference_file.log
 
-USER jenkins
+# Use root user instead
+USER root
 
 COPY jenkins.sh /usr/local/bin/jenkins.sh
+
 ENTRYPOINT ["/bin/tini", "--", "/usr/local/bin/jenkins.sh"]
 
 # from a derived Dockerfile, can use `RUN plugins.sh active.txt` to setup /usr/share/jenkins/ref/plugins from a support bundle
 COPY plugins.sh /usr/local/bin/plugins.sh
+
